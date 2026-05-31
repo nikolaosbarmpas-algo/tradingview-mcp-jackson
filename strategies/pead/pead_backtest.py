@@ -414,22 +414,36 @@ def load_csv(symbol: str, data_dir: str) -> SymbolData:
     return sd
 
 
+def _col(row, *names):
+    """Tolerant column lookup across yfinance versions (case / spacing differ)."""
+    norm = {str(k).lower().replace(" ", ""): k for k in row.index}
+    for n in names:
+        key = n.lower().replace(" ", "")
+        if key in norm:
+            return row[norm[key]]
+    return None
+
+
 def fetch_yf(symbol: str, start: str, end: str, limit: int) -> SymbolData:
     import yfinance as yf  # lazy import — only needed for the online path
 
     t = yf.Ticker(symbol)
-    hist = t.history(start=start, end=end, auto_adjust=False)
+    # auto_adjust=True -> split/dividend-adjusted OHLC, so 60-day holds aren't
+    # broken by artificial split jumps.
+    hist = t.history(start=start, end=end, auto_adjust=True)
     bars = [Bar(idx.date(), float(row["Open"]), float(row["Close"]))
-            for idx, row in hist.iterrows() if not math.isnan(row["Open"])]
+            for idx, row in hist.iterrows()
+            if not (math.isnan(row["Open"]) or math.isnan(row["Close"]))]
 
     earnings: list[Earning] = []
-    ed = t.get_earnings_dates(limit=limit)
+    try:
+        ed = t.get_earnings_dates(limit=limit)
+    except Exception:  # noqa: BLE001 — some tickers have no earnings calendar
+        ed = None
     if ed is not None:
         for idx, row in ed.iterrows():
-            actual = row.get("Reported EPS")
-            estimate = row.get("EPS Estimate")
-            if actual is None or estimate is None:
-                continue
+            actual = _col(row, "Reported EPS", "epsActual")
+            estimate = _col(row, "EPS Estimate", "epsEstimate")
             try:
                 actual, estimate = float(actual), float(estimate)
             except (TypeError, ValueError):
