@@ -12,3 +12,7 @@ discovery-log.json
 
 # Install-time symlink created by the one-shot setup
 AGENTS.md
+
+# Python
+__pycache__/
+*.pyc

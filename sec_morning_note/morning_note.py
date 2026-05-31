@@ -9,9 +9,9 @@ identify yourself with a name + email.
 
 Usage:
     export EDGAR_IDENTITY="Your Name your@email.com"
-    python edgar/morning_note.py AAPL
-    python edgar/morning_note.py AAPL MSFT NVDA --filings 8
-    python edgar/morning_note.py AAPL --out notes/
+    python sec_morning_note/morning_note.py AAPL
+    python sec_morning_note/morning_note.py AAPL MSFT NVDA --filings 8
+    python sec_morning_note/morning_note.py AAPL --out notes/
 
 Notes:
 - Data is point-in-time from the most recent 10-K; it is NOT live price data.

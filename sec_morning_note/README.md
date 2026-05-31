@@ -23,7 +23,7 @@ parsed from EDGAR's XBRL, for free, reproducibly.
 ## Setup
 
 ```bash
-pip install -r edgar/requirements.txt
+pip install -r sec_morning_note/requirements.txt
 export EDGAR_IDENTITY="Your Name your@email.com"   # SEC fair-access requirement
 ```
 
@@ -31,13 +31,13 @@ export EDGAR_IDENTITY="Your Name your@email.com"   # SEC fair-access requirement
 
 ```bash
 # Single ticker
-python edgar/morning_note.py AAPL
+python sec_morning_note/morning_note.py AAPL
 
 # Several at once, list 8 recent filings each
-python edgar/morning_note.py AAPL MSFT NVDA --filings 8
+python sec_morning_note/morning_note.py AAPL MSFT NVDA --filings 8
 
 # Keep statements compact and also save to files
-python edgar/morning_note.py AAPL --max-rows 25 --out notes/
+python sec_morning_note/morning_note.py AAPL --max-rows 25 --out notes/
 ```
 
 | Flag | Meaning |
