@@ -1,0 +1,168 @@
+//@version=6
+// =============================================================================
+//  PEAD — Post-Earnings Announcement Drift
+// =============================================================================
+//  Mechanical backtest of the most-documented anomaly in academic finance.
+//
+//  The edge (Ball & Brown 1968; Bernard & Thomas 1989; Livnat & Mendenhall
+//  2006; reviewed by Fink 2021): a stock's price keeps drifting in the
+//  direction of its earnings surprise for roughly 60 trading days after the
+//  announcement. We trade that drift with three rules and nothing else.
+//
+//    1. ENTRY  — concordant signal: the earnings surprise AND the price
+//                reaction must agree. Beat + up day -> long. Miss + down day
+//                -> short. Disagreement = no trade. Enter at the open of the
+//                session after the reaction has played out.
+//    2. EXIT   — time-based. Hold for `holdDays` (default 60) trading days.
+//                No stop, no target — the drift is statistical, not directional,
+//                so a tight stop would systematically cut the winners.
+//    3. SIZING — fixed % of equity per position (default 10%) on a 100k account.
+//
+//  Earnings data is pulled live and FREE from TradingView via request.earnings()
+//  — actual reported EPS vs. the analyst consensus estimate. No paid feed, no
+//  hardcoded spreadsheet. Change the chart symbol and the strategy re-derives
+//  every event for that ticker automatically.
+//
+//  NOTE: this reproduces the single-symbol logic from the video. To replicate
+//  the 20-stock basket result, run it across the same universe (see README).
+// =============================================================================
+
+strategy(
+     title              = "PEAD — Post-Earnings Announcement Drift",
+     shorttitle         = "PEAD",
+     overlay            = true,
+     initial_capital    = 100000,
+     default_qty_type   = strategy.percent_of_equity,
+     default_qty_value  = 10,
+     pyramiding         = 0,
+     calc_on_every_tick = false,
+     commission_type    = strategy.commission.percent,
+     commission_value   = 0.0,
+     close_entries_rule = "FIFO")
+
+// -----------------------------------------------------------------------------
+//  Configuration presets (the five configurations tested in the video)
+// -----------------------------------------------------------------------------
+//  1. Concordant ON  | no threshold | long + short   -> by-the-book base case
+//  2. Concordant OFF | no threshold | long + short   -> surprise direction only
+//  3. Concordant OFF | 5% threshold | long + short   -> high-magnitude only
+//  4. Concordant ON  | 5% threshold | long + short   -> both filters stacked
+//  5. Concordant ON  | no threshold | LONG ONLY      -> cleanest risk-adjusted
+//  6. Custom         | use the manual switches below
+// -----------------------------------------------------------------------------
+string PRESET_1 = "1 — Concordant, no threshold, long+short (base)"
+string PRESET_2 = "2 — Surprise only, no threshold, long+short"
+string PRESET_3 = "3 — Surprise only, 5% threshold, long+short"
+string PRESET_4 = "4 — Concordant + 5% threshold, long+short"
+string PRESET_5 = "5 — Concordant, no threshold, LONG ONLY (cleanest)"
+string PRESET_C = "6 — Custom (use manual switches)"
+
+preset = input.string(PRESET_5, "Configuration", options =
+     [PRESET_1, PRESET_2, PRESET_3, PRESET_4, PRESET_5, PRESET_C],
+     group = "Strategy configuration")
+
+// Manual switches — only used when preset == Custom.
+mConcordant   = input.bool(true,  "Require concordant reaction", group = "Custom switches",
+     tooltip = "Surprise direction and same-day price reaction must agree.")
+mUseThreshold = input.bool(false, "Filter small surprises",      group = "Custom switches")
+mMinSurprise  = input.float(5.0,  "Min |surprise| %", minval = 0, group = "Custom switches",
+     tooltip = "Skip events whose surprise magnitude is below this percent of the estimate.")
+mLongOnly     = input.bool(false, "Long only",                   group = "Custom switches",
+     tooltip = "Drop the short leg. Post-2010, negative surprises drift far less reliably.")
+
+// Resolve the active configuration from the preset.
+useConcordant = switch preset
+    PRESET_1 => true
+    PRESET_2 => false
+    PRESET_3 => false
+    PRESET_4 => true
+    PRESET_5 => true
+    => mConcordant
+
+useThreshold = switch preset
+    PRESET_3 => true
+    PRESET_4 => true
+    PRESET_C => mUseThreshold
+    => false
+
+minSurprise = preset == PRESET_C ? mMinSurprise : 5.0
+
+longOnly = switch preset
+    PRESET_5 => true
+    PRESET_C => mLongOnly
+    => false
+
+// -----------------------------------------------------------------------------
+//  Risk / exit parameters
+// -----------------------------------------------------------------------------
+holdDays = input.int(60, "Hold period (trading days)", minval = 1, group = "Exit / risk",
+     tooltip = "Bernard & Thomas (1989) measured the drift lasting ~60 trading days.")
+
+// -----------------------------------------------------------------------------
+//  Earnings data (free, from TradingView)
+// -----------------------------------------------------------------------------
+//  gaps default (gaps_off) forward-fills the last reported value, so a brand new
+//  report is detected as a change in the actual EPS series.
+actualEps   = request.earnings(syminfo.tickerid, earnings.actual,   ignore_invalid = true)
+estimateEps = request.earnings(syminfo.tickerid, earnings.estimate, ignore_invalid = true)
+
+isReportBar = not na(actualEps) and (na(actualEps[1]) or actualEps != actualEps[1])
+
+// Earnings surprise, in percent of the (absolute) consensus estimate.
+surprise    = actualEps - estimateEps
+denom       = math.abs(estimateEps)
+surprisePct = denom != 0 ? surprise / denom * 100.0 : na
+
+// Same-day price reaction (close-to-close on the report bar).
+reactionUp   = close > close[1]
+reactionDown = close < close[1]
+
+// Surprise direction.
+beat = not na(surprise) and surprise > 0
+miss = not na(surprise) and surprise < 0
+
+// Magnitude filter.
+bigEnough = not useThreshold or (not na(surprisePct) and math.abs(surprisePct) >= minSurprise)
+
+// -----------------------------------------------------------------------------
+//  Signals
+// -----------------------------------------------------------------------------
+longSignal  = isReportBar and beat and bigEnough and (not useConcordant or reactionUp)
+shortSignal = isReportBar and miss and bigEnough and (not useConcordant or reactionDown) and not longOnly
+
+// -----------------------------------------------------------------------------
+//  Execution
+// -----------------------------------------------------------------------------
+//  Calling strategy.entry on the report bar fills at the next session's open —
+//  exactly "enter at the open of the following session after the reaction."
+//  Quarterly earnings (~63 trading days apart) and a 60-day hold mean positions
+//  on a single symbol effectively never overlap, so pyramiding=0 is correct.
+var int entryBar = na
+
+if longSignal
+    strategy.entry("PEAD Long", strategy.long)
+    entryBar := bar_index
+
+if shortSignal
+    strategy.entry("PEAD Short", strategy.short)
+    entryBar := bar_index
+
+// Time-based exit: close `holdDays` trading days after entry.
+if strategy.position_size != 0 and not na(entryBar) and (bar_index - entryBar) >= holdDays
+    strategy.close_all(comment = "60d hold")
+    entryBar := na
+
+// -----------------------------------------------------------------------------
+//  Visualization
+// -----------------------------------------------------------------------------
+plotshape(longSignal,  title = "Long entry",  style = shape.triangleup,
+     location = location.belowbar, color = color.new(color.teal, 0), size = size.small)
+plotshape(shortSignal, title = "Short entry", style = shape.triangledown,
+     location = location.abovebar, color = color.new(color.red, 0),  size = size.small)
+
+if isReportBar
+    txt = (na(surprisePct) ? "EPS " + str.tostring(actualEps, "#.##")
+         : (surprise >= 0 ? "Beat +" : "Miss ") + str.tostring(surprisePct, "#.#") + "%")
+    label.new(bar_index, high, txt, yloc = yloc.abovebar, style = label.style_label_down,
+         color = color.new(beat ? color.teal : color.red, 20), textcolor = color.white,
+         size = size.tiny)
