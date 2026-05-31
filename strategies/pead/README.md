@@ -131,13 +131,16 @@ data/earnings/<SYMBOL>.csv   date,timing,actual_eps,estimate_eps   (timing = BMO
 ```
 
 Useful flags: `--config 1..5|all`, `--hold-days 60`, `--pct 10`,
-`--capital 100000`, `--symbols AAPL MSFT ...`, `--per-symbol`.
+`--capital 100000`, `--symbols AAPL MSFT ...`, `--per-symbol`, `--compound`
+(size off current equity, like MultiCharts).
 
-> **Sizing note:** the Python engine uses fixed-fraction sizing (10% of the
+> **Sizing:** by default the engine uses fixed-fraction sizing (10% of the
 > *initial* capital per position) so trades are order-independent and easy to
-> audit. The video's MultiCharts run compounds off current equity, so absolute
-> dollar figures will differ — the *shape* of the findings (filter interactions,
-> the weak short leg) is what reproduces.
+> audit. Pass **`--compound`** to size each position as 10% of *current* equity
+> instead, compounding across the basket — that matches the video's MultiCharts
+> "percent of equity" run (higher returns, higher drawdown). Absolute dollar
+> figures still differ from the video (different price feed), but the *shape* of
+> the findings (filter interactions, the weak short leg) is what reproduces.
 
 ### The 20-stock basket (video universe)
 

@@ -148,8 +148,19 @@ class SymbolData:
 
 
 # =============================================================================
-# Trade
+# Signal (an entry/exit decision, before sizing) and Trade (sized)
 # =============================================================================
+@dataclass
+class Signal:
+    symbol: str
+    side: int               # +1 long, -1 short
+    entry_date: date
+    exit_date: date
+    entry_price: float
+    exit_price: float
+    surprise_pct: float
+
+
 @dataclass
 class Trade:
     symbol: str
@@ -187,11 +198,10 @@ def _reaction_index(sd: SymbolData, e: Earning) -> int | None:
     return sd.first_idx_strictly_after(e.d)
 
 
-def generate_trades(sd: SymbolData, cfg: Config, hold_days: int,
-                    capital: float, pct: float) -> list[Trade]:
-    trades: list[Trade] = []
+def generate_signals(sd: SymbolData, cfg: Config, hold_days: int) -> list["Signal"]:
+    """Entry/exit decisions for one symbol — sizing-agnostic."""
+    signals: list[Signal] = []
     n = len(sd.bars)
-    notional_per_trade = capital * pct / 100.0  # fixed-fraction sizing
 
     for e in sd.earnings:
         if e.estimate is None or e.actual is None:
@@ -233,12 +243,51 @@ def generate_trades(sd: SymbolData, cfg: Config, hold_days: int,
         if entry_price <= 0:
             continue
 
-        shares = notional_per_trade / entry_price
-        trades.append(Trade(
+        signals.append(Signal(
             symbol=sd.symbol, side=side,
             entry_date=sd.bars[entry_idx].d, exit_date=sd.bars[exit_idx].d,
-            entry_price=entry_price, exit_price=exit_price,
-            shares=shares, surprise_pct=surprise_pct,
+            entry_price=entry_price, exit_price=exit_price, surprise_pct=surprise_pct,
+        ))
+    return signals
+
+
+def generate_trades(sd: SymbolData, cfg: Config, hold_days: int,
+                    capital: float, pct: float) -> list[Trade]:
+    """Fixed-fraction sizing: each position is pct% of the *initial* capital."""
+    notional = capital * pct / 100.0
+    return [
+        Trade(symbol=s.symbol, side=s.side, entry_date=s.entry_date, exit_date=s.exit_date,
+              entry_price=s.entry_price, exit_price=s.exit_price,
+              shares=notional / s.entry_price, surprise_pct=s.surprise_pct)
+        for s in generate_signals(sd, cfg, hold_days)
+    ]
+
+
+def size_compound(signals: list["Signal"], sym_data: dict[str, SymbolData],
+                  capital: float, pct: float) -> list[Trade]:
+    """
+    Compounding sizing (MultiCharts-style 'percent of equity'): each position is
+    pct% of the *current* portfolio equity at entry time — realized P/L from
+    already-closed trades plus the marked value of still-open ones. Processed
+    chronologically by entry date across the whole basket.
+    """
+    ordered = sorted(signals, key=lambda s: (s.entry_date, s.symbol))
+    trades: list[Trade] = []
+    for s in ordered:
+        equity = capital
+        for t in trades:
+            if t.exit_date <= s.entry_date:
+                equity += t.pnl                                   # realized
+            elif t.entry_date <= s.entry_date < t.exit_date:
+                px = sym_data[t.symbol].close_on_or_before(s.entry_date)  # unrealized
+                if px is not None:
+                    equity += t.side * t.shares * (px - t.entry_price)
+        notional = max(equity, 0.0) * pct / 100.0
+        shares = (notional / s.entry_price) if s.entry_price > 0 else 0.0
+        trades.append(Trade(
+            symbol=s.symbol, side=s.side, entry_date=s.entry_date, exit_date=s.exit_date,
+            entry_price=s.entry_price, exit_price=s.exit_price,
+            shares=shares, surprise_pct=s.surprise_pct,
         ))
     return trades
 
@@ -572,6 +621,9 @@ def main(argv=None) -> int:
     ap.add_argument("--pct", type=float, default=10.0, help="Percent of capital per position.")
     ap.add_argument("--per-symbol", action="store_true",
                     help="Also print a per-symbol breakdown (uses --config, or config 5).")
+    ap.add_argument("--compound", action="store_true",
+                    help="Size each position as pct%% of CURRENT equity (MultiCharts-style), "
+                         "compounding across the basket. Default is fixed-fraction of initial capital.")
     args = ap.parse_args(argv)
 
     print("Loading data ...", file=sys.stderr)
@@ -592,13 +644,20 @@ def main(argv=None) -> int:
             print(f"Unknown config '{key}' (use 1-5 or all).", file=sys.stderr)
             return 2
         cfg = CONFIGS[key]
-        all_trades: list[Trade] = []
-        for sd in sym_data.values():
-            all_trades.extend(generate_trades(sd, cfg, args.hold_days, args.capital, args.pct))
+        if args.compound:
+            signals: list[Signal] = []
+            for sd in sym_data.values():
+                signals.extend(generate_signals(sd, cfg, args.hold_days))
+            all_trades = size_compound(signals, sym_data, args.capital, args.pct)
+        else:
+            all_trades = []
+            for sd in sym_data.values():
+                all_trades.extend(generate_trades(sd, cfg, args.hold_days, args.capital, args.pct))
         results.append(evaluate(cfg.name, all_trades, sym_data, args.capital))
 
-    print(f"PEAD backtest  ·  ${args.capital:,.0f} capital  ·  {args.pct:.0f}% per position  "
-          f"·  {args.hold_days}-day hold\n")
+    sizing = "compounding % of equity" if args.compound else "fixed % of initial capital"
+    print(f"PEAD backtest  ·  ${args.capital:,.0f} capital  ·  {args.pct:.0f}% per position "
+          f"({sizing})  ·  {args.hold_days}-day hold\n")
     print_table(results)
 
     if args.per_symbol:
