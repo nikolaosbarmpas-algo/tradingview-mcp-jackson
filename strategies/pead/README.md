@@ -77,7 +77,14 @@ Two findings worth keeping:
 > and basket-level numbers require running the same universe (below) and summing
 > the equity curves. Treat them as the target, not a guarantee.
 
-## How to run it
+## Two implementations
+
+| File | What it is | Best for |
+|------|-----------|----------|
+| [`pead-strategy.pine`](./pead-strategy.pine) | Pine v6 `strategy()` for the TradingView Strategy Tester | Visual, on-chart, one symbol at a time |
+| [`pead_backtest.py`](./pead_backtest.py) | Standalone Python portfolio backtest over the whole basket | Reproducing the basket-level numbers, batch research |
+
+## How to run it (Pine / TradingView)
 
 1. Open the Pine editor in TradingView and paste
    [`pead-strategy.pine`](./pead-strategy.pine).
@@ -95,6 +102,42 @@ pine_smart_compile  → compile + auto-detect errors
 ui_open_panel       → "strategy-tester" to read the report
 chart_set_symbol    → cycle the basket to compare per-symbol results
 ```
+
+## How to run it (Python)
+
+The Python version backtests the **whole basket at once** and prints the same
+metrics the video reports (net P/L, max drawdown, profit factor, win rate,
+CAGR, Calmar) plus a **long-vs-short P/L split**. The engine is **pure standard
+library** — no dependencies for the offline/self-test paths.
+
+```bash
+# 1) Verify the engine end-to-end with synthetic data — zero deps, zero network:
+python3 pead_backtest.py --selftest --config all
+
+# 2) Live FREE data (prices + actual/estimate EPS) from Yahoo via yfinance:
+pip install -r requirements.txt
+python3 pead_backtest.py --source yf --config all --cache data
+
+# 3) Offline / the video's actual workflow — paste data into CSVs and read back:
+python3 pead_backtest.py --source csv --data-dir data --config 5 --per-symbol
+```
+
+A small **runnable sample** ships under [`data/`](./data) so the `--source csv`
+path works out of the box and documents the exact file format:
+
+```
+data/prices/<SYMBOL>.csv     date,open,high,low,close,volume   (open & close used)
+data/earnings/<SYMBOL>.csv   date,timing,actual_eps,estimate_eps   (timing = BMO/AMC, optional)
+```
+
+Useful flags: `--config 1..5|all`, `--hold-days 60`, `--pct 10`,
+`--capital 100000`, `--symbols AAPL MSFT ...`, `--per-symbol`.
+
+> **Sizing note:** the Python engine uses fixed-fraction sizing (10% of the
+> *initial* capital per position) so trades are order-independent and easy to
+> audit. The video's MultiCharts run compounds off current equity, so absolute
+> dollar figures will differ — the *shape* of the findings (filter interactions,
+> the weak short leg) is what reproduces.
 
 ### The 20-stock basket (video universe)
 

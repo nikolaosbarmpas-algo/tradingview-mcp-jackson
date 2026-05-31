@@ -1,0 +1,5 @@
+# The backtest engine (pead_backtest.py) is pure Python standard library —
+# no dependencies are needed for --source csv or --selftest.
+#
+# Only the live free-data path (--source yf) needs yfinance:
+yfinance>=0.2.40
